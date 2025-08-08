@@ -54,7 +54,9 @@ unsigned long previousMillis = 0;
 // Setup Prusa Link
 WiFiClient client;
 // Initialize Prusa Link API. Port 80 is the default for Prusa Link HTTP.
-PrusaLinkApi prusaLink(client, CONFIG_IP, 80, SECRET_PRUSA_USER, SECRET_PRUSA_PASS);
+PrusaLinkApi prusaLink(client, CONFIG_IP, CONFIG_PORT, SECRET_PRUSA_USER, SECRET_PRUSA_PASS);
+
+
 
 unsigned long wifiLostSince = 0;
 bool wifiWasOffline = false;
@@ -85,6 +87,9 @@ void setup() {
   Serial.begin(115200);
   delay(500);
   Serial.println("[System] Starting up...");
+
+  // enable debug
+  prusaLink._debug = true;
 
   // Start LED Matrix
   ProtomatterStatus status = matrix.begin();
@@ -158,14 +163,21 @@ void loop() {
       }
 
     } else {
-      Serial.println("[PrusaLink] API offline");
+  Serial.println("[PrusaLink] API offline");
 
-      if (!prusaLinkWasOffline) {
-        prusaLinkLostSince = currentMillis;
-        prusaLinkWasOffline = true;
-      } else if (currentMillis - prusaLinkLostSince >= 3000) {
-        displayPrusaLinkOffline(); // Only show after 3s
-      }
+  // ADD THESE TWO LINES FOR DETAILED DEBUGGING
+  Serial.print("[PrusaLink] HTTP Status Code: ");
+  Serial.println(prusaLink.httpStatusCode);
+  Serial.print("[PrusaLink] HTTP Error Body: ");
+  Serial.println(prusaLink.httpErrorBody);
+  // END OF ADDED LINES
+
+  if (!prusaLinkWasOffline) {
+    prusaLinkLostSince = currentMillis;
+    prusaLinkWasOffline = true;
+  } else if (currentMillis - prusaLinkLostSince >= 3000) {
+    displayPrusaLinkOffline();
+  }
     }
   }
 
