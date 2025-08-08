@@ -212,9 +212,9 @@ bool PrusaLinkApi::getJobInfo() {
   strncpy(jobInfo.jobFileName, filenameStr, sizeof(jobInfo.jobFileName) - 1);
   jobInfo.jobFileName[sizeof(jobInfo.jobFileName) - 1] = '\0';
 
-  jobInfo.progressCompletion = root["progress"]["completion"];
-  jobInfo.progressPrintTime = root["progress"]["print_time"];
-  jobInfo.progressPrintTimeLeft = root["progress"]["print_time_left"];
+  jobInfo.progressCompletion = root["progress"];
+  jobInfo.progressPrintTime = root["time_printing"];
+  jobInfo.progressPrintTimeLeft = root["time_remaining"];
 
   return true;
 }
