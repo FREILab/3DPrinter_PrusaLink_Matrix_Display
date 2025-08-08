@@ -109,20 +109,21 @@ void setup() {
 
 void loop() {
   unsigned long currentMillis = millis();
-
   // Check the Wi-Fi connection and API status every second
   if (currentMillis - previousMillis >= CHECK_INTERVAL) {
     previousMillis = currentMillis;
 
+    // Feed the watchdog BEFORE potential long-running operations to prevent a reset
+    esp_task_wdt_reset();
+
     // === Check Wi-Fi connection ===
     if (WiFi.status() != WL_CONNECTED) {
       Serial.println("[WiFi] Wi-Fi lost. Reconnecting...");
-
       if (!wifiWasOffline) {
         wifiLostSince = currentMillis;
         wifiWasOffline = true;
       } else if (currentMillis - wifiLostSince >= 3000) {
-        displayWiFiOffline(); // Only show after 3s
+        displayWiFiOffline();
         reconnectWiFi();
       }
       return; // No API calls without WiFi
@@ -136,10 +137,13 @@ void loop() {
     if (prusaLink.getPrinterStatus()) {
       prusaLinkWasOffline = false;
 
+      // Feed the watchdog again after the first successful API call
+      esp_task_wdt_reset();
+
       // State: Printer is printing
       if (prusaLink.printerStats.printerStatePrinting) {
         if (prusaLink.getJobInfo()) {
-          float progress = prusaLink.jobInfo.progressCompletion / 100.0f; // Progress is a percentage
+          float progress = prusaLink.jobInfo.progressCompletion / 100.0f;
 
           displayPrinterPrinting(
             prusaLink.jobInfo.progressPrintTimeLeft,
@@ -156,32 +160,30 @@ void loop() {
       }
       // Other states (paused, finished, busy, etc.) can be handled here if needed
       else {
-        // For now, treat other states like "Ready" but maybe with a different color or text
+        // For now, treat other states like "Ready"
         displayPrinterReady(prusaLink.printerStats.printerTool0TempActual, prusaLink.printerStats.printerBedTempActual);
         Serial.print("[PrusaLink] Printer in unhandled state: ");
         Serial.println(prusaLink.printerStats.printerState);
       }
 
     } else {
-  Serial.println("[PrusaLink] API offline");
+      Serial.println("[PrusaLink] API offline");
+      // Optional Debugging lines
+      Serial.print("[PrusaLink] HTTP Status Code: ");
+      Serial.println(prusaLink.httpStatusCode);
+      Serial.print("[PrusaLink] HTTP Error Body: ");
+      Serial.println(prusaLink.httpErrorBody);
 
-  // ADD THESE TWO LINES FOR DETAILED DEBUGGING
-  Serial.print("[PrusaLink] HTTP Status Code: ");
-  Serial.println(prusaLink.httpStatusCode);
-  Serial.print("[PrusaLink] HTTP Error Body: ");
-  Serial.println(prusaLink.httpErrorBody);
-  // END OF ADDED LINES
-
-  if (!prusaLinkWasOffline) {
-    prusaLinkLostSince = currentMillis;
-    prusaLinkWasOffline = true;
-  } else if (currentMillis - prusaLinkLostSince >= 3000) {
-    displayPrusaLinkOffline();
-  }
+      if (!prusaLinkWasOffline) {
+        prusaLinkLostSince = currentMillis;
+        prusaLinkWasOffline = true;
+      } else if (currentMillis - prusaLinkLostSince >= 3000) {
+        displayPrusaLinkOffline();
+      }
     }
   }
 
-  // Feed the watchdog to prevent a reset
+  // Feed the watchdog one last time to be safe
   esp_task_wdt_reset();
 }
 
