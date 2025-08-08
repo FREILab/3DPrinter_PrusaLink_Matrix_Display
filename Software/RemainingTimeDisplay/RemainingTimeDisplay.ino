@@ -89,7 +89,7 @@ void setup() {
   Serial.println("[System] Starting up...");
 
   // enable debug
-  prusaLink._debug = true;
+  // prusaLink._debug = true;
 
   // Start LED Matrix
   ProtomatterStatus status = matrix.begin();
