@@ -1,21 +1,21 @@
 /**********************************************************************
- *  A sketch to display to read out the state of a Octoprint          *
- *  instance and display it onto a matrix LED display.                *
- *                                                                    *
- *  Necessary acces data has to be provided to the secret.h           *
- *  02/2025                                                           *
- *  By Marius Tetard for FREILab Freiburg e.V. https://freilab.de     *
- *                                                                    *
- *  This software is open source and licensed under the MIT License.  *
- *  See the LICENSE file or visit https://opensource.org/licenses/MIT *
- *  for more details.                                                 *
+ * A sketch to display to read out the state of a Prusa Link         *
+ * instance and display it onto a matrix LED display.                *
+ * *
+ * Necessary acces data has to be provided to the secret.h           *
+ * 08/2025 (Adapted for Prusa Link)                                  *
+ * By Marius Tetard for FREILab Freiburg e.V. https://freilab.de     *
+ * *
+ * This software is open source and licensed under the MIT License.  *
+ * See the LICENSE file or visit https://opensource.org/licenses/MIT *
+ * for more details.                                                 *
 **********************************************************************/
 
 
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include "secret.h"
-#include <OctoPrintAPI.h>          // For connection to OctoPrint
+#include "PrusaLinkAPI.h"          // For connection to Prusa Link
 #include <Adafruit_Protomatter.h>  // For RGB matrix
 #include <esp_task_wdt.h>          // For watchdog timer
 
@@ -24,6 +24,7 @@
 #define WIDTH 64    // Matrix width (pixels)
 #define MAX_FPS 45  // Maximum redraw rate, frames/second
 
+// PIN Configuration for the ESP32-S3 and the RGB Matrix
 uint8_t rgbPins[] = { 42, 41, 40, 38, 39, 37 };
 uint8_t addrPins[] = { 45, 36, 48, 35, 21 };
 uint8_t clockPin = 2;
@@ -50,24 +51,20 @@ char str[64];   // Buffer to text
 const unsigned long CHECK_INTERVAL = 1000;  // Check Wi-Fi every 1 second
 unsigned long previousMillis = 0;
 
-// Setup Octoprint
+// Setup Prusa Link
 WiFiClient client;
-const char* ip_address = CONFIG_IP;
-IPAddress ip(ip_address);
-const int octoprint_httpPort = CONFIG_PORT;
-String octoprint_apikey = SECRET_API;  //See top of file or GIT Readme about getting API key
-// Initialize OctoPrint API
-OctoprintApi api(client, ip, octoprint_httpPort, octoprint_apikey);
+// Initialize Prusa Link API. Port 80 is the default for Prusa Link HTTP.
+PrusaLinkApi prusaLink(client, CONFIG_IP, 80, SECRET_API);
 
 unsigned long wifiLostSince = 0;
 bool wifiWasOffline = false;
 
-unsigned long octoprintLostSince = 0;
-bool octoprintWasOffline = false;
+unsigned long prusaLinkLostSince = 0;
+bool prusaLinkWasOffline = false;
 
 
-const int tempGood_T0 = 50; // below this temperature T0 is considered cool
-const int tempGood_T1 = 50; // below this temperature T1 is considered cool
+const int tempGood_T0 = 50; // below this temperature Nozzle is considered cool
+const int tempGood_Bed = 50; // below this temperature Bed is considered cool
 
 // Watchdog timeout (3 seconds)
 /* info on core mask:
@@ -78,7 +75,7 @@ const int tempGood_T1 = 50; // below this temperature T1 is considered cool
 */
 esp_task_wdt_config_t twdt_config
 {
-  timeout_ms:     2000U,
+  timeout_ms:     3000U, // Increased to 3 seconds
   idle_core_mask: 0b011,
   trigger_panic:  true
 };
@@ -87,13 +84,14 @@ void setup() {
   // Start Serial Interface
   Serial.begin(115200);
   delay(500);
+  Serial.println("[System] Starting up...");
 
   // Start LED Matrix
   ProtomatterStatus status = matrix.begin();
   Serial.print("[Matrix] Protomatter begin() status: ");
   Serial.println((int)status);
 
-  // Wifi not yet connected
+  // Show initial WiFi offline screen
   displayWiFiOffline();
 
   // connect to WiFi
@@ -107,11 +105,11 @@ void setup() {
 void loop() {
   unsigned long currentMillis = millis();
 
-  // Check the Wi-Fi connection every second
+  // Check the Wi-Fi connection and API status every second
   if (currentMillis - previousMillis >= CHECK_INTERVAL) {
     previousMillis = currentMillis;
 
-    // === WLAN-Verbindung prüfen ===
+    // === Check Wi-Fi connection ===
     if (WiFi.status() != WL_CONNECTED) {
       Serial.println("[WiFi] Wi-Fi lost. Reconnecting...");
 
@@ -119,49 +117,54 @@ void loop() {
         wifiLostSince = currentMillis;
         wifiWasOffline = true;
       } else if (currentMillis - wifiLostSince >= 3000) {
-        displayWiFiOffline(); // nur wenn länger als 3s weg
+        displayWiFiOffline(); // Only show after 3s
         reconnectWiFi();
       }
-      return; // ohne WLAN keine API
+      return; // No API calls without WiFi
     } else {
       wifiWasOffline = false;
     }
 
-    Serial.println("[WiFi] Wi-Fi active");
+    Serial.println("[API] Checking Prusa Link...");
+    
+    // === Check Prusa Link connection and status ===
+    if (prusaLink.getPrinterStatus()) {
+      prusaLinkWasOffline = false;
 
-    // === OctoPrint-Verbindung prüfen ===
-    if (api.getPrinterStatistics()) {
-      octoprintWasOffline = false;
-
-      // State: printer ready (operational + ready)
-      if (api.printerStats.printerStateoperational && api.printerStats.printerStateready) {
-        displayPrinterReady(api.printerStats.printerTool0TempActual, api.printerStats.printerBedTempActual);
-      }
-
-      // State printer printing (operational + printing)
-      if (api.printerStats.printerStateoperational && api.printerStats.printerStatePrinting) {
-        if (api.getPrintJob()) {
-          float progress = (float)api.printJob.progressPrintTime /
-                          ((float)api.printJob.progressPrintTime + (float)api.printJob.progressPrintTimeLeft);
+      // State: Printer is printing
+      if (prusaLink.printerStats.printerStatePrinting) {
+        if (prusaLink.getJobInfo()) {
+          float progress = prusaLink.jobInfo.progressCompletion / 100.0f; // Progress is a percentage
 
           displayPrinterPrinting(
-            api.printJob.progressPrintTimeLeft,
+            prusaLink.jobInfo.progressPrintTimeLeft,
             progress,
-            api.printerStats.printerTool0TempActual,
-            api.printerStats.printerBedTempActual);
+            prusaLink.printerStats.printerTool0TempActual,
+            prusaLink.printerStats.printerBedTempActual);
         } else {
-          Serial.println("[OctoPrint] PrintJob-API offline (aber PrinterStats da)");
+          Serial.println("[PrusaLink] JobInfo-API offline (but Status is available)");
         }
+      }
+      // State: Printer is ready/idle
+      else if (prusaLink.printerStats.printerStateReady) {
+        displayPrinterReady(prusaLink.printerStats.printerTool0TempActual, prusaLink.printerStats.printerBedTempActual);
+      }
+      // Other states (paused, finished, busy, etc.) can be handled here if needed
+      else {
+        // For now, treat other states like "Ready" but maybe with a different color or text
+        displayPrinterReady(prusaLink.printerStats.printerTool0TempActual, prusaLink.printerStats.printerBedTempActual);
+        Serial.print("[PrusaLink] Printer in unhandled state: ");
+        Serial.println(prusaLink.printerStats.printerState);
       }
 
     } else {
-      Serial.println("[OctoPrint] OctoPrint offline");
+      Serial.println("[PrusaLink] API offline");
 
-      if (!octoprintWasOffline) {
-        octoprintLostSince = currentMillis;
-        octoprintWasOffline = true;
-      } else if (currentMillis - octoprintLostSince >= 3000) {
-        displayOctoprintOffline(); // nur nach 3s zeigen
+      if (!prusaLinkWasOffline) {
+        prusaLinkLostSince = currentMillis;
+        prusaLinkWasOffline = true;
+      } else if (currentMillis - prusaLinkLostSince >= 3000) {
+        displayPrusaLinkOffline(); // Only show after 3s
       }
     }
   }
@@ -176,41 +179,42 @@ void connectToWiFi() {
 
   int attempts = 0;
   Serial.print("[WiFi] ");
-  while (WiFi.status() != WL_CONNECTED && attempts < 10) {
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) { // Increased attempts
     delay(500);
     Serial.print(".");
     attempts++;
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nConnected to Wi-Fi.");
+    Serial.println("\n[WiFi] Connected.");
     Serial.println("[WiFi] IP Address: " + WiFi.localIP().toString());
   } else {
-    Serial.println("\nFailed to connect to Wi-Fi.");
+    Serial.println("\n[WiFi] Failed to connect.");
   }
 }
 
 void reconnectWiFi() {
   WiFi.disconnect();
+  delay(100);
   WiFi.reconnect();
 
   int attempts = 0;
-  Serial.print("[WiFi] ");
-  while (WiFi.status() != WL_CONNECTED && attempts < 10) {
+  Serial.print("[WiFi] Reconnecting...");
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
     delay(500);
     Serial.print(".");
     attempts++;
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nReconnected to Wi-Fi.");
+    Serial.println("\n[WiFi] Reconnected.");
   } else {
-    Serial.println("\nReconnection attempt failed.");
+    Serial.println("\n[WiFi] Reconnection attempt failed.");
   }
 }
 
 
-void displayPrinterPrinting(int seconds, float progress, int temp_T0, int temp_T1) {
+void displayPrinterPrinting(int seconds, float progress, int temp_T0, int temp_Bed) {
   int h = seconds / 3600;
   int min = (seconds % 3600) / 60;
 
@@ -218,15 +222,10 @@ void displayPrinterPrinting(int seconds, float progress, int temp_T0, int temp_T
   int h_ones, h_tens, m_tens, m_ones;
 
   // Extract digits
-  h_tens = h / 10;  // Extract tens place
-  h_ones = h % 10;  // Extract ones place
-
-  m_tens = min / 10;  // Extract tens place
-  m_ones = min % 10;  // Extract ones place
-
-  // cap tens places
-  if (h_tens > 9) { h_tens = 9; }
-  if (m_tens > 6) { m_tens = 5; }
+  h_tens = h / 10;
+  h_ones = h % 10;
+  m_tens = min / 10;
+  m_ones = min % 10;
 
   // Fill background black
   matrix.fillScreen(0);
@@ -235,64 +234,44 @@ void displayPrinterPrinting(int seconds, float progress, int temp_T0, int temp_T
   // draw border
   matrix.drawRect(0, 0, 64, 32, matrix.color565(0, 255, 0));  // green
 
-  // Text "Time" (always)
-  sprintf(str, "Time");
-  textX = 2;
-  textY = 3;
+  // Text "Time"
   matrix.setTextColor(0xFFFF);  // white
-  matrix.setCursor(textX, textY);
-  matrix.println(str);
+  matrix.setCursor(2, 3);
+  matrix.print("Time");
 
-  // Minutes Text (always)
-  sprintf(str, "m");
-  textX = 57;
-  textY = 3;
-  matrix.setTextColor(0xFFFF);  // white
-  matrix.setCursor(textX, textY);
-  matrix.println(str);
+  // Minutes Text
+  matrix.setCursor(57, 3);
+  matrix.print("m");
 
-  // Minutes ones (always)
-  textX = 51;
-  textY = 3;
+  // Minutes ones
   matrix.setTextColor(matrix.color565(0, 255, 255));  // bright blue
-  matrix.setCursor(textX, textY);
-  matrix.println(m_ones);
+  matrix.setCursor(51, 3);
+  matrix.print(m_ones);
 
   // Minutes tens (if h>0 or m_tens>0)
-  if ((h > 0) or (m_tens > 0)) {
-    textX = 45;
-    textY = 3;
-    matrix.setTextColor(matrix.color565(0, 255, 255));  // bright blue
-    matrix.setCursor(textX, textY);
-    matrix.println(m_tens);
+  if ((h > 0) || (m_tens > 0)) {
+    matrix.setCursor(45, 3);
+    matrix.print(m_tens);
   }
 
   // Hours Text (if h>0)
   if (h > 0) {
-    sprintf(str, "h");
-    textX = 38;
-    textY = 3;
     matrix.setTextColor(0xFFFF);  // white
-    matrix.setCursor(textX, textY);
-    matrix.println(str);
+    matrix.setCursor(38, 3);
+    matrix.print("h");
   }
 
   // Hours ones (if h>0)
   if (h > 0) {
-    textX = 32;
-    textY = 3;
     matrix.setTextColor(matrix.color565(0, 255, 255));  // bright blue
-    matrix.setCursor(textX, textY);
-    matrix.println(h_ones);
+    matrix.setCursor(32, 3);
+    matrix.print(h_ones);
   }
 
   // Hours tens (if h>9)
   if (h > 9) {
-    textX = 26;
-    textY = 3;
-    matrix.setTextColor(matrix.color565(0, 255, 255));  // bright blue
-    matrix.setCursor(textX, textY);
-    matrix.println(h_tens);
+    matrix.setCursor(26, 3);
+    matrix.print(h_tens);
   }
 
   // Draw Progressbar outline
@@ -300,95 +279,52 @@ void displayPrinterPrinting(int seconds, float progress, int temp_T0, int temp_T
 
   // draw the progress bar length depending on the progress
   int bar_max_progress = scaleFloatToInteger(progress);
-  for (int i = 3; i < bar_max_progress; i = i + 1) {
-    matrix.drawRect(i, 13, 1, 4, matrix.color565(0, 255, 0));  // green
-  }
-
-  // blink the last bar if necesary
-
-  int blink = 0;
-  if ((millis() / 1000) % 2) {
-    blink = 0;
-  } else {
-    blink = 1;
-  }
-
-  if (blink == 1) {
-    if (bar_max_progress == 3) { bar_max_progress = 4; }
-    matrix.drawRect(bar_max_progress - 1, 13, 1, 4, matrix.color565(0, 0, 0));  // black
-  }
+  matrix.fillRect(3, 13, bar_max_progress - 3, 4, matrix.color565(0, 255, 0)); // green filled rect
 
   // Line separating Progress and Temperatures
   matrix.drawRect(1, 20, 62, 1, matrix.color565(255, 255, 255));  // white
 
-  // Display T0
-  if(temp_T0 < 10) {
-    textX = 16;
-  } else if (temp_T0 < 100) {
-    textX = 10;
-  } else if (temp_T0 >= 100) {
-    textX = 4;
-  }
+  // Display T0 (Nozzle)
+  if(temp_T0 < 10) textX = 16;
+  else if (temp_T0 < 100) textX = 10;
+  else textX = 4;
   textY = 23;
-  if (temp_T0 >= tempGood_T0) {
-    // hot
-    matrix.setTextColor(matrix.color565(255, 0, 0));  // red
-  } else {
-    // cool
-    matrix.setTextColor(matrix.color565(0, 255, 0));  // green
-  }
+  if (temp_T0 >= tempGood_T0) matrix.setTextColor(matrix.color565(255, 0, 0));  // red
+  else matrix.setTextColor(matrix.color565(0, 255, 0));  // green
   matrix.setCursor(textX, textY);
-  matrix.println(temp_T0);
+  matrix.print(temp_T0);
 
-  // display "C" of "°C"
-  textX = 26;
-  textY = 23;
+  // display "°C" for T0
   matrix.setTextColor(matrix.color565(255, 255, 255));  // white
-  matrix.setCursor(textX, textY);
-  matrix.println("C");
-
-  // display "°" of "°C"
-  matrix.drawCircle(textX-2, textY, 1, matrix.color565(255, 255, 255)); // white
+  matrix.setCursor(26, 23);
+  matrix.print("C");
+  matrix.drawCircle(24, 23, 1, matrix.color565(255, 255, 255)); // white
 
   // Display Slash
-  textX = 33;
+  matrix.setCursor(33, 23);
+  matrix.print("|");
+
+  // Display T_Bed
+  if(temp_Bed < 10) textX = 46;
+  else if (temp_Bed < 100) textX = 40;
+  else textX = 34; // For 3-digit bed temps
   textY = 23;
+  if (temp_Bed >= tempGood_Bed) matrix.setTextColor(matrix.color565(255, 0, 0));  // red
+  else matrix.setTextColor(matrix.color565(0, 255, 0));  // green
+  matrix.setCursor(textX, textY);
+  matrix.print(temp_Bed);
+
+  // display "°C" for Bed
   matrix.setTextColor(matrix.color565(255, 255, 255));  // white
-  matrix.setCursor(textX, textY);
-  matrix.println("|");
-
-  // Display T1
-  if(temp_T1 < 10) {
-    textX = 46;
-  } else if (temp_T1 >= 10) {
-    textX = 40;
-  }
-  textY = 23;
-  if (temp_T1 >= tempGood_T1) {
-    // hot
-    matrix.setTextColor(matrix.color565(255, 0, 0));  // red
-  } else {
-    // cool
-    matrix.setTextColor(matrix.color565(0, 255, 0));  // green
-  }
-  matrix.setCursor(textX, textY);
-  matrix.println(temp_T1);
-
-  // display "C" of "°C"
-  textX = 56;
-  textY = 23;
-  matrix.setTextColor(matrix.color565(255, 255, 255));  // white
-  matrix.setCursor(textX, textY);
-  matrix.println("C");
-
-  // display "°" of "°C"
-  matrix.drawCircle(textX-2, textY, 1, matrix.color565(255, 255, 255)); // white
+  matrix.setCursor(56, 23);
+  matrix.print("C");
+  matrix.drawCircle(54, 23, 1, matrix.color565(255, 255, 255)); // white
 
   // Update Display
   matrix.show();
 }
 
-void displayPrinterReady(int temp_T0, int temp_T1) {
+void displayPrinterReady(int temp_T0, int temp_Bed) {
 
   // Fill background black
   matrix.fillScreen(0);
@@ -398,88 +334,58 @@ void displayPrinterReady(int temp_T0, int temp_T1) {
   // draw border
   matrix.drawRect(0, 0, 64, 32, matrix.color565(255, 255, 0));  // yellow
 
-  // Text "Ready" (always)
-  sprintf(str, "Ready");
-  textX = 2;
-  textY = 3;
+  // Text "Ready"
   matrix.setTextColor(0xFFFF);  // white
-  matrix.setCursor(textX, textY);
-  matrix.println(str);
+  matrix.setCursor(2, 3);
+  matrix.print("Ready");
 
-  // Draw Progressbar outline
+  // Draw Progressbar outline (empty)
   matrix.drawRect(2, 12, 60, 6, matrix.color565(128, 128, 128));  // gray
 
   // Line separating Progress and Temperatures
   matrix.drawRect(1, 20, 62, 1, matrix.color565(255, 255, 255));  // white
 
-  // Display T0
-  if(temp_T0 < 10) {
-    textX = 16;
-  } else if (temp_T0 < 100) {
-    textX = 10;
-  } else if (temp_T0 >= 100) {
-    textX = 4;
-  }
+  // Display T0 (Nozzle)
+  if(temp_T0 < 10) textX = 16;
+  else if (temp_T0 < 100) textX = 10;
+  else textX = 4;
   textY = 23;
-  if (temp_T0 >= tempGood_T0) {
-    // hot
-    matrix.setTextColor(matrix.color565(255, 0, 0));  // red
-  } else {
-    // cool
-    matrix.setTextColor(matrix.color565(0, 255, 0));  // green
-  }
+  if (temp_T0 >= tempGood_T0) matrix.setTextColor(matrix.color565(255, 0, 0));  // red
+  else matrix.setTextColor(matrix.color565(0, 255, 0));  // green
   matrix.setCursor(textX, textY);
-  matrix.println(temp_T0);
+  matrix.print(temp_T0);
 
-  // display "C" of "°C"
-  textX = 26;
-  textY = 23;
+  // display "°C" for T0
   matrix.setTextColor(matrix.color565(255, 255, 255));  // white
-  matrix.setCursor(textX, textY);
-  matrix.println("C");
-
-  // display "°" of "°C"
-  matrix.drawCircle(textX-2, textY, 1, matrix.color565(255, 255, 255)); // white
+  matrix.setCursor(26, 23);
+  matrix.print("C");
+  matrix.drawCircle(24, 23, 1, matrix.color565(255, 255, 255)); // white
 
   // Display Slash
-  textX = 33;
+  matrix.setCursor(33, 23);
+  matrix.print("|");
+
+  // Display T_Bed
+  if(temp_Bed < 10) textX = 46;
+  else if (temp_Bed < 100) textX = 40;
+  else textX = 34;
   textY = 23;
+  if (temp_Bed >= tempGood_Bed) matrix.setTextColor(matrix.color565(255, 0, 0));  // red
+  else matrix.setTextColor(matrix.color565(0, 255, 0));  // green
+  matrix.setCursor(textX, textY);
+  matrix.print(temp_Bed);
+
+  // display "°C" for Bed
   matrix.setTextColor(matrix.color565(255, 255, 255));  // white
-  matrix.setCursor(textX, textY);
-  matrix.println("|");
-
-  // Display T1
-  if(temp_T1 < 10) {
-    textX = 46;
-  } else if (temp_T1 >= 10) {
-    textX = 40;
-  }
-  textY = 23;
-  if (temp_T1 >= tempGood_T1) {
-    // hot
-    matrix.setTextColor(matrix.color565(255, 0, 0));  // red
-  } else {
-    // cool
-    matrix.setTextColor(matrix.color565(0, 255, 0));  // green
-  }
-  matrix.setCursor(textX, textY);
-  matrix.println(temp_T1);
-
-  // display "C" of "°C"
-  textX = 56;
-  textY = 23;
-  matrix.setTextColor(matrix.color565(255, 255, 255));  // white
-  matrix.setCursor(textX, textY);
-  matrix.println("C");
-
-  // display "°" of "°C"
-  matrix.drawCircle(textX-2, textY, 1, matrix.color565(255, 255, 255)); // white
+  matrix.setCursor(56, 23);
+  matrix.print("C");
+  matrix.drawCircle(54, 23, 1, matrix.color565(255, 255, 255)); // white
 
   // Update Display
   matrix.show();
 }
 
-void displayOctoprintOffline() {
+void displayPrusaLinkOffline() {
   // Fill background black
   matrix.fillScreen(0);
   matrix.setTextWrap(false);
@@ -487,20 +393,13 @@ void displayOctoprintOffline() {
   // draw border
   matrix.drawRect(0, 0, 64, 32, matrix.color565(255, 0, 0));  // red
 
-  // Text time (always)
-  sprintf(str, "Octoprint");
-  textX = 2;
-  textY = 3;
+  // Text
   matrix.setTextColor(0xFFFF);  // white
-  matrix.setCursor(textX, textY);
-  matrix.println(str);
+  matrix.setCursor(2, 3);
+  matrix.print("Prusa Link");
 
-  sprintf(str, "offline");
-  textX = 2;
-  textY = 14;
-  matrix.setTextColor(0xFFFF);  // white
-  matrix.setCursor(textX, textY);
-  matrix.println(str);
+  matrix.setCursor(2, 14);
+  matrix.print("offline");
 
   // Update Display
   matrix.show();
@@ -514,20 +413,13 @@ void displayWiFiOffline() {
   // draw border
   matrix.drawRect(0, 0, 64, 32, matrix.color565(255, 0, 0));  // red
 
-  // Text time (always)
-  sprintf(str, "WiFi");
-  textX = 2;
-  textY = 3;
+  // Text
   matrix.setTextColor(0xFFFF);  // white
-  matrix.setCursor(textX, textY);
-  matrix.println(str);
+  matrix.setCursor(2, 3);
+  matrix.print("WiFi");
 
-  sprintf(str, "offline");
-  textX = 2;
-  textY = 14;
-  matrix.setTextColor(0xFFFF);  // white
-  matrix.setCursor(textX, textY);
-  matrix.println(str);
+  matrix.setCursor(2, 14);
+  matrix.print("offline");
 
   // Update Display
   matrix.show();
@@ -544,36 +436,37 @@ int scaleFloatToInteger(float value) {
   return scaledValue;
 }
 
-// debug: print octoprint API data
-void printOctoprintDebug() {
-  if (api.getPrinterStatistics()) {
+// debug: print prusa link API data
+void printPrusaLinkDebug() {
+  if (prusaLink.getPrinterStatus()) {
     Serial.println();
     Serial.println("---------States---------");
     Serial.print("Printer Current State: ");
-    Serial.println(api.printerStats.printerState);
-    Serial.print("Printer State - closedOrError:  ");
-    Serial.println(api.printerStats.printerStateclosedOrError);
-    Serial.print("Printer State - error:  ");
-    Serial.println(api.printerStats.printerStateerror);
-    Serial.print("Printer State - operational:  ");
-    Serial.println(api.printerStats.printerStateoperational);
-    Serial.print("Printer State - paused:  ");
-    Serial.println(api.printerStats.printerStatepaused);
-    Serial.print("Printer State - printing:  ");
-    Serial.println(api.printerStats.printerStatePrinting);
-    Serial.print("Printer State - ready:  ");
-    Serial.println(api.printerStats.printerStateready);
-    Serial.print("Printer State - sdReady:  ");
-    Serial.println(api.printerStats.printerStatesdReady);
+    Serial.println(prusaLink.printerStats.printerState);
+    Serial.print("Printer State - Printing:  ");
+    Serial.println(prusaLink.printerStats.printerStatePrinting);
+    Serial.print("Printer State - Paused:  ");
+    Serial.println(prusaLink.printerStats.printerStatePaused);
+    Serial.print("Printer State - Ready:  ");
+    Serial.println(prusaLink.printerStats.printerStateReady);
     Serial.println("------------------------");
     Serial.println();
     Serial.println("------Termperatures-----");
-    Serial.print("Printer Temp - Tool0 (°C):  ");
-    Serial.println(api.printerStats.printerTool0TempActual);
-    Serial.print("Printer State - Tool1 (°C):  ");
-    Serial.println(api.printerStats.printerTool1TempActual);
-    Serial.print("Printer State - Bed (°C):  ");
-    Serial.println(api.printerStats.printerBedTempActual);
+    Serial.print("Printer Temp - Nozzle (°C):  ");
+    Serial.println(prusaLink.printerStats.printerTool0TempActual);
+    Serial.print("Printer Temp - Bed (°C):  ");
+    Serial.println(prusaLink.printerStats.printerBedTempActual);
+    Serial.println("------------------------");
+  }
+   if (prusaLink.getJobInfo()) {
+    Serial.println();
+    Serial.println("----------Job-----------");
+    Serial.print("File Name: ");
+    Serial.println(prusaLink.jobInfo.jobFileName);
+    Serial.print("Progress: ");
+    Serial.println(prusaLink.jobInfo.progressCompletion);
+    Serial.print("Time Left (s): ");
+    Serial.println(prusaLink.jobInfo.progressPrintTimeLeft);
     Serial.println("------------------------");
   }
 }
