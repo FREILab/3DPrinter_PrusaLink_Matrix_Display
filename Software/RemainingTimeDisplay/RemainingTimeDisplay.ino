@@ -54,7 +54,7 @@ unsigned long previousMillis = 0;
 // Setup Prusa Link
 WiFiClient client;
 // Initialize Prusa Link API. Port 80 is the default for Prusa Link HTTP.
-PrusaLinkApi prusaLink(client, CONFIG_IP, 80, SECRET_API);
+PrusaLinkApi prusaLink(client, CONFIG_IP, 80, SECRET_PRUSA_USER, SECRET_PRUSA_PASS);
 
 unsigned long wifiLostSince = 0;
 bool wifiWasOffline = false;

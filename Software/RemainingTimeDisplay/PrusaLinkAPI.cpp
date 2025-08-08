@@ -12,33 +12,81 @@
 #include "PrusaLinkAPI.h"
 #include "Arduino.h"
 
+// --- Helper function for Base64 encoding ---
+// Required for HTTP Basic Authentication
+const char b64_alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                            "abcdefghijklmnopqrstuvwxyz"
+                            "0123456789+/";
+
+int base64_encode(char *output, const char *input, int inputLen) {
+    int i = 0, j = 0;
+    int encLen = 0;
+    unsigned char a, b, c;
+    while (inputLen > 0) {
+        a = input[i++];
+        inputLen--;
+        b = (inputLen > 0) ? input[i++] : 0;
+        inputLen--;
+        c = (inputLen > 0) ? input[i++] : 0;
+        inputLen--;
+        output[j++] = b64_alphabet[a >> 2];
+        output[j++] = b64_alphabet[((a & 3) << 4) | (b >> 4)];
+        output[j++] = b64_alphabet[((b & 15) << 2) | (c >> 6)];
+        output[j++] = b64_alphabet[c & 63];
+        encLen += 4;
+    }
+    while ((j % 4) != 0) {
+        output[j++] = '=';
+    }
+    output[j] = '\0';
+    return encLen;
+}
+// --- End of helper function ---
+
+
 PrusaLinkApi::PrusaLinkApi(void){
-  if (_debug)
-    Serial.println("Be sure to Call init to setup and start the PrusaLinkApi instance");
+	if (_debug)
+		Serial.println("Be sure to Call init to setup and start the PrusaLinkApi instance");
 }
 
-PrusaLinkApi::PrusaLinkApi(Client &client, IPAddress prusaLinkIp, int prusaLinkPort, String apiKey) {
-  init(client, prusaLinkIp, prusaLinkPort, apiKey);
+PrusaLinkApi::PrusaLinkApi(Client &client, IPAddress prusaLinkIp, int prusaLinkPort, const char* username, const char* password) {
+  init(client, prusaLinkIp, prusaLinkPort, username, password);
 }
 
-void PrusaLinkApi::init(Client &client, IPAddress prusaLinkIp, int prusaLinkPort, String apiKey) {
+void PrusaLinkApi::init(Client &client, IPAddress prusaLinkIp, int prusaLinkPort, const char* username, const char* password) {
   _client         = &client;
-  _apiKey         = apiKey;
   _prusaLinkIp    = prusaLinkIp;
   _prusaLinkPort  = prusaLinkPort;
   _usingIpAddress = true;
+
+  // Create the "username:password" string
+  char credentials[64];
+  snprintf(credentials, sizeof(credentials), "%s:%s", username, password);
+
+  // Base64-encode the credentials
+  char encodedCredentials[96];
+  base64_encode(encodedCredentials, credentials, strlen(credentials));
+
+  // Prepare the complete Authorization header
+  snprintf(_authHeader, sizeof(_authHeader), "Basic %s", encodedCredentials);
 }
 
-PrusaLinkApi::PrusaLinkApi(Client &client, char *prusaLinkUrl, int prusaLinkPort, String apiKey) {
-  init(client, prusaLinkUrl, prusaLinkPort, apiKey);
+PrusaLinkApi::PrusaLinkApi(Client &client, char *prusaLinkUrl, int prusaLinkPort, const char* username, const char* password) {
+	init(client, prusaLinkUrl, prusaLinkPort, username, password);
 }
 
-void PrusaLinkApi::init(Client &client, char *prusaLinkUrl, int prusaLinkPort, String apiKey) {
+void PrusaLinkApi::init(Client &client, char *prusaLinkUrl, int prusaLinkPort, const char* username, const char* password) {
   _client         = &client;
-  _apiKey         = apiKey;
   _prusaLinkUrl   = prusaLinkUrl;
   _prusaLinkPort  = prusaLinkPort;
   _usingIpAddress = false;
+  
+  // Identical authorization logic as above
+  char credentials[64];
+  snprintf(credentials, sizeof(credentials), "%s:%s", username, password);
+  char encodedCredentials[96];
+  base64_encode(encodedCredentials, credentials, strlen(credentials));
+  snprintf(_authHeader, sizeof(_authHeader), "Basic %s", encodedCredentials);
 }
 
 String PrusaLinkApi::sendRequestToPrusaLink(String type, String command, const char *data) {
@@ -58,9 +106,6 @@ String PrusaLinkApi::sendRequestToPrusaLink(String type, String command, const c
   bool finishedHeaders    = false;
   bool currentLineIsBlank = true;
   int ch_count            = 0;
-  int headerCount         = 0;
-  int headerLineStart     = 0;
-  int bodySize            = -1;
   unsigned long now;
 
   bool connected;
@@ -74,18 +119,17 @@ String PrusaLinkApi::sendRequestToPrusaLink(String type, String command, const c
     if (_debug)
       Serial.println(".... connected to server");
 
-    char useragent[64];
-    snprintf(useragent, 64, "User-Agent: %s", USER_AGENT);
-
     _client->println(type + " " + command + " HTTP/1.1");
     _client->print("Host: ");
     if (_usingIpAddress)
       _client->println(_prusaLinkIp);
     else
       _client->println(_prusaLinkUrl);
-    _client->print("X-Api-Key: ");
-    _client->println(_apiKey);
-    _client->println(useragent);
+    
+    // Send the pre-formatted Authorization header
+    _client->println("Authorization: " + String(_authHeader));
+
+    _client->println("User-Agent: " + String(USER_AGENT));
     _client->println("Connection: close");
     if (data != NULL) {
       _client->println("Content-Type: application/json");
@@ -116,24 +160,10 @@ String PrusaLinkApi::sendRequestToPrusaLink(String type, String command, const c
           if (c == '\n') {
             if (currentLineIsBlank)
               finishedHeaders = true;
-            else {
-              if (headers.substring(headerLineStart).startsWith("Content-Length: "))
-                bodySize = (headers.substring(headerLineStart + 16)).toInt();
-              headers = headers + c;
-              headerCount++;
-              headerLineStart = headerCount;
-            }
-          } else {
-            headers = headers + c;
-            headerCount++;
           }
+          headers = headers + c;
         } else {
-          if (ch_count < maxMessageLength) {
-            body = body + c;
-            ch_count++;
-            if (ch_count == bodySize)
-              break;
-          }
+          body = body + c;
         }
         if (c == '\n')
           currentLineIsBlank = true;
@@ -141,8 +171,6 @@ String PrusaLinkApi::sendRequestToPrusaLink(String type, String command, const c
           currentLineIsBlank = false;
         }
       }
-      if (ch_count == bodySize && bodySize != -1)
-        break;
     }
   } else {
     if (_debug) {
@@ -152,12 +180,11 @@ String PrusaLinkApi::sendRequestToPrusaLink(String type, String command, const c
 
   closeClient();
 
-  int httpCode = extractHttpCode(statusCode, body);
+  httpStatusCode = extractHttpCode(statusCode, body);
   if (_debug) {
     Serial.print("\nhttpCode:");
-    Serial.println(httpCode);
+    Serial.println(httpStatusCode);
   }
-  httpStatusCode = httpCode;
   if(httpStatusCode < 200 || httpStatusCode >= 300){httpErrorBody = body;}
 
   return body;
@@ -193,14 +220,17 @@ bool PrusaLinkApi::getPrinterStatus() {
     if(_debug) Serial.println("Failed to parse printer status");
     return false;
   }
+  
+  const char* stateStr = root["printer"]["state"] | "UNKNOWN";
+  strncpy(printerStats.printerState, stateStr, sizeof(printerStats.printerState) - 1);
+  printerStats.printerState[sizeof(printerStats.printerState) - 1] = '\0';
 
-  printerStats.printerState = (const char*)root["printer"]["state"];
-  printerStats.printerStatePrinting = (strcmp(printerStats.printerState.c_str(), "PRINTING") == 0);
-  printerStats.printerStatePaused = (strcmp(printerStats.printerState.c_str(), "PAUSED") == 0);
-  printerStats.printerStateError = (strcmp(printerStats.printerState.c_str(), "ERROR") == 0) || (strcmp(printerStats.printerState.c_str(), "ATTENTION") == 0);
-  printerStats.printerStateFinished = (strcmp(printerStats.printerState.c_str(), "FINISHED") == 0);
-  printerStats.printerStateReady = (strcmp(printerStats.printerState.c_str(), "IDLE") == 0);
-  printerStats.printerStateBusy = (strcmp(printerStats.printerState.c_str(), "BUSY") == 0);
+  printerStats.printerStatePrinting = (strcmp(printerStats.printerState, "PRINTING") == 0);
+  printerStats.printerStatePaused = (strcmp(printerStats.printerState, "PAUSED") == 0);
+  printerStats.printerStateError = (strcmp(printerStats.printerState, "ERROR") == 0) || (strcmp(printerStats.printerState, "ATTENTION") == 0);
+  printerStats.printerStateFinished = (strcmp(printerStats.printerState, "FINISHED") == 0);
+  printerStats.printerStateReady = (strcmp(printerStats.printerState, "IDLE") == 0);
+  printerStats.printerStateBusy = (strcmp(printerStats.printerState, "BUSY") == 0);
 
   printerStats.printerBedTempActual = root["printer"]["temp_bed"];
   printerStats.printerBedTempTarget = root["printer"]["target_bed"];
@@ -222,8 +252,11 @@ bool PrusaLinkApi::getJobInfo() {
       if(_debug && !root.containsKey("progress")) Serial.println("No active job");
       return false;
   }
+  
+  const char* filenameStr = root["file"]["display_name"] | "No file";
+  strncpy(jobInfo.jobFileName, filenameStr, sizeof(jobInfo.jobFileName) - 1);
+  jobInfo.jobFileName[sizeof(jobInfo.jobFileName) - 1] = '\0';
 
-  jobInfo.jobFileName = (const char*)root["file"]["display_name"];
   jobInfo.progressCompletion = root["progress"]["completion"];
   jobInfo.progressPrintTime = root["progress"]["print_time"];
   jobInfo.progressPrintTimeLeft = root["progress"]["print_time_left"];
@@ -237,31 +270,6 @@ bool PrusaLinkApi::printerCommand(const char* gcodeCommand) {
     sendPostToPrusaLink("/api/v1/printer/command", postData);
     return (httpStatusCode == 204);
 }
-
-bool PrusaLinkApi::printerHome(bool x, bool y, bool z) {
-    return printerCommand("G28");
-}
-
-bool PrusaLinkApi::jobStart() {
-    sendPostToPrusaLink("/api/v1/job", "{\"command\": \"start\"}");
-    return (httpStatusCode == 204);
-}
-
-bool PrusaLinkApi::jobPause() {
-    sendPostToPrusaLink("/api/v1/job", "{\"command\": \"pause\"}");
-    return (httpStatusCode == 204);
-}
-
-bool PrusaLinkApi::jobResume() {
-    sendPostToPrusaLink("/api/v1/job", "{\"command\": \"resume\"}");
-    return (httpStatusCode == 204);
-}
-
-bool PrusaLinkApi::jobStop() {
-    sendDeleteToPrusaLink("/api/v1/job");
-    return (httpStatusCode == 204);
-}
-
 
 void PrusaLinkApi::closeClient() { _client->stop(); }
 
