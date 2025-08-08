@@ -404,6 +404,9 @@ void displayPrusaLinkOffline() {
   matrix.fillScreen(0);
   matrix.setTextWrap(false);
   matrix.setTextSize(1);
+
+  // keep display off
+  /*
   // draw border
   matrix.drawRect(0, 0, 64, 32, matrix.color565(255, 0, 0));  // red
 
@@ -413,7 +416,7 @@ void displayPrusaLinkOffline() {
   matrix.print("Prusa Link");
 
   matrix.setCursor(2, 14);
-  matrix.print("offline");
+  matrix.print("offline");*/
 
   // Update Display
   matrix.show();
