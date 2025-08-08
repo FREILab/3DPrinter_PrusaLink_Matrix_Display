@@ -4,8 +4,8 @@
  | |_| | (__| || (_) |  __/| |  | | | | | |_ / ___ \|  __/| |
   \___/ \___|\__\___/|_|   |_|  |_|_| |_|\__/_/   \_\_|  |___|
 .......By Stephen Ludgate https://www.chunkymedia.co.uk.......
-.......Redesigned for Prusa Link by Marius Tetard 
-....... 08/2025....
+.......Redesigned for Prusa Link by Marius Tetard
+.......Updated for API Key Auth....... 08/2025....
 
 */
 
@@ -20,9 +20,9 @@
 #define POSTDATA_SIZE       256
 #define POSTDATA_GCODE_SIZE 50
 #define JSONDOCUMENT_SIZE   2048
-#define USER_AGENT          "PrusaLinkAPI/1.1.0 (Arduino)"
+#define USER_AGENT          "PrusaLinkAPI/1.2.0 (Arduino)" // Version updated
 
-// Structs bleiben unverändert...
+// Structs for printer status and job info remain unchanged.
 struct prusaLinkStatistics {
   char printerState[20];
   bool printerStatePrinting;
@@ -48,13 +48,13 @@ struct prusaLinkJobInfo {
 class PrusaLinkApi {
  public:
   PrusaLinkApi(void);
-  // Konstruktor und init nehmen jetzt Benutzername und Passwort
-  PrusaLinkApi(Client &client, IPAddress prusaLinkIp, int prusaLinkPort, const char* username, const char* password);
-  PrusaLinkApi(Client &client, char *prusaLinkUrl, int prusaLinkPort, const char* username, const char* password);
-  void init(Client &client, char *prusaLinkUrl, int prusaLinkPort, const char* username, const char* password);
-  void init(Client &client, IPAddress prusaLinkIp, int prusaLinkPort, const char* username, const char* password);
+  // Constructor and init now accept an API Key instead of username/password
+  PrusaLinkApi(Client &client, IPAddress prusaLinkIp, int prusaLinkPort, const char* apiKey);
+  PrusaLinkApi(Client &client, char *prusaLinkUrl, int prusaLinkPort, const char* apiKey);
+  void init(Client &client, char *prusaLinkUrl, int prusaLinkPort, const char* apiKey);
+  void init(Client &client, IPAddress prusaLinkIp, int prusaLinkPort, const char* apiKey);
 
-  // Öffentliche Methoden bleiben gleich
+  // Public methods remain the same
   String sendGetToPrusaLink(String endpoint);
   String sendPostToPrusaLink(String endpoint, const char *postData);
   String sendDeleteToPrusaLink(String endpoint);
@@ -63,7 +63,6 @@ class PrusaLinkApi {
   bool getJobInfo();
   prusaLinkJobInfo jobInfo;
   bool printerCommand(const char* gcodeCommand);
-  // ... (andere Befehle)
 
   bool _debug          = false;
   int httpStatusCode   = 0;
@@ -76,8 +75,8 @@ class PrusaLinkApi {
   char *_prusaLinkUrl;
   int _prusaLinkPort;
   
-  // Speichert den vorbereiteten "Authorization: Basic ..." Header
-  char _authHeader[96]; 
+  // Stores the API Key
+  const char* _apiKey;
 
   void closeClient();
   int extractHttpCode(String statusCode, String body);

@@ -54,7 +54,7 @@ unsigned long previousMillis = 0;
 // Setup Prusa Link
 WiFiClient client;
 // Initialize Prusa Link API. Port 80 is the default for Prusa Link HTTP.
-PrusaLinkApi prusaLink(client, CONFIG_IP, CONFIG_PORT, SECRET_PRUSA_USER, SECRET_PRUSA_PASS);
+PrusaLinkApi prusaLink(client, CONFIG_IP, CONFIG_PORT, SECRET_PRUSA_API_KEY);
 
 
 

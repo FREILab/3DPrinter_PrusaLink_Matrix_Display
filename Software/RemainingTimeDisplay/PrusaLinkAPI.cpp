@@ -4,89 +4,43 @@
  | |_| | (__| || (_) |  __/| |  | | | | | |_ / ___ \|  __/| |
   \___/ \___|\__\___/|_|   |_|  |_|_| |_|\__/_/   \_\_|  |___|
 .......By Stephen Ludgate https://www.chunkymedia.co.uk.......
-.......Redesigned for Prusa Link by Marius Tetard 
-....... 08/2025....
+.......Redesigned for Prusa Link by Marius Tetard
+.......Updated for API Key Auth....... 08/2025....
 
 */
 
 #include "PrusaLinkAPI.h"
 #include "Arduino.h"
 
-// --- Helper function for Base64 encoding ---
-// Required for HTTP Basic Authentication
-const char b64_alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-                            "abcdefghijklmnopqrstuvwxyz"
-                            "0123456789+/";
-
-int base64_encode(char *output, const char *input, int inputLen) {
-    int i = 0, j = 0;
-    int encLen = 0;
-    unsigned char a, b, c;
-    while (inputLen > 0) {
-        a = input[i++];
-        inputLen--;
-        b = (inputLen > 0) ? input[i++] : 0;
-        inputLen--;
-        c = (inputLen > 0) ? input[i++] : 0;
-        inputLen--;
-        output[j++] = b64_alphabet[a >> 2];
-        output[j++] = b64_alphabet[((a & 3) << 4) | (b >> 4)];
-        output[j++] = b64_alphabet[((b & 15) << 2) | (c >> 6)];
-        output[j++] = b64_alphabet[c & 63];
-        encLen += 4;
-    }
-    while ((j % 4) != 0) {
-        output[j++] = '=';
-    }
-    output[j] = '\0';
-    return encLen;
-}
-// --- End of helper function ---
-
+// The Base64 helper function is no longer needed and has been removed.
 
 PrusaLinkApi::PrusaLinkApi(void){
 	if (_debug)
 		Serial.println("Be sure to Call init to setup and start the PrusaLinkApi instance");
 }
 
-PrusaLinkApi::PrusaLinkApi(Client &client, IPAddress prusaLinkIp, int prusaLinkPort, const char* username, const char* password) {
-  init(client, prusaLinkIp, prusaLinkPort, username, password);
+PrusaLinkApi::PrusaLinkApi(Client &client, IPAddress prusaLinkIp, int prusaLinkPort, const char* apiKey) {
+  init(client, prusaLinkIp, prusaLinkPort, apiKey);
 }
 
-void PrusaLinkApi::init(Client &client, IPAddress prusaLinkIp, int prusaLinkPort, const char* username, const char* password) {
+void PrusaLinkApi::init(Client &client, IPAddress prusaLinkIp, int prusaLinkPort, const char* apiKey) {
   _client         = &client;
   _prusaLinkIp    = prusaLinkIp;
   _prusaLinkPort  = prusaLinkPort;
   _usingIpAddress = true;
-
-  // Create the "username:password" string
-  char credentials[64];
-  snprintf(credentials, sizeof(credentials), "%s:%s", username, password);
-
-  // Base64-encode the credentials
-  char encodedCredentials[96];
-  base64_encode(encodedCredentials, credentials, strlen(credentials));
-
-  // Prepare the complete Authorization header
-  snprintf(_authHeader, sizeof(_authHeader), "Basic %s", encodedCredentials);
+  _apiKey         = apiKey; // Store the API Key
 }
 
-PrusaLinkApi::PrusaLinkApi(Client &client, char *prusaLinkUrl, int prusaLinkPort, const char* username, const char* password) {
-	init(client, prusaLinkUrl, prusaLinkPort, username, password);
+PrusaLinkApi::PrusaLinkApi(Client &client, char *prusaLinkUrl, int prusaLinkPort, const char* apiKey) {
+	init(client, prusaLinkUrl, prusaLinkPort, apiKey);
 }
 
-void PrusaLinkApi::init(Client &client, char *prusaLinkUrl, int prusaLinkPort, const char* username, const char* password) {
+void PrusaLinkApi::init(Client &client, char *prusaLinkUrl, int prusaLinkPort, const char* apiKey) {
   _client         = &client;
   _prusaLinkUrl   = prusaLinkUrl;
   _prusaLinkPort  = prusaLinkPort;
   _usingIpAddress = false;
-  
-  // Identical authorization logic as above
-  char credentials[64];
-  snprintf(credentials, sizeof(credentials), "%s:%s", username, password);
-  char encodedCredentials[96];
-  base64_encode(encodedCredentials, credentials, strlen(credentials));
-  snprintf(_authHeader, sizeof(_authHeader), "Basic %s", encodedCredentials);
+  _apiKey         = apiKey; // Store the API Key
 }
 
 String PrusaLinkApi::sendRequestToPrusaLink(String type, String command, const char *data) {
@@ -126,8 +80,9 @@ String PrusaLinkApi::sendRequestToPrusaLink(String type, String command, const c
     else
       _client->println(_prusaLinkUrl);
     
-    // Send the pre-formatted Authorization header
-    _client->println("Authorization: " + String(_authHeader));
+    // Send the API Key in the X-Api-Key header
+    _client->print("X-Api-Key: ");
+    _client->println(_apiKey);
 
     _client->println("User-Agent: " + String(USER_AGENT));
     _client->println("Connection: close");
