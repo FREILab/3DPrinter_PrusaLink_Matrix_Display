@@ -85,6 +85,14 @@ esp_task_wdt_config_t twdt_config {
   idle_core_mask : 0b011,
   trigger_panic : true
 };
+
+/**
+ * @brief Main setup function, runs once on boot.
+ *
+ * Initializes the Serial connection for debugging, sets up the GPIO pins for
+ * the status LED, starts the RGB matrix display, connects to WiFi, and
+ * configures the watchdog timer to prevent crashes.
+ */
 void setup() {
   // Start Serial Interface
   Serial.begin(115200);
@@ -119,6 +127,13 @@ void setup() {
   esp_task_wdt_add(NULL);           // Add current task to watchdog
 }
 
+/**
+ * @brief Main program loop, runs repeatedly after setup().
+ *
+ * Checks the WiFi and Prusa Link API status every CHECK_INTERVAL milliseconds.
+ * Based on the status, it updates the display and the status LED. It also
+ * resets the watchdog timer to indicate the program is running correctly.
+ */
 void loop() {
   unsigned long currentMillis = millis();
   // Check the Wi-Fi connection and API status every second
@@ -194,6 +209,13 @@ void loop() {
   esp_task_wdt_reset();
 }
 
+/**
+ * @brief Handles the initial connection to the WiFi network.
+ *
+ * Uses the credentials from secret.h to connect to WiFi. It attempts to
+ * connect for a fixed number of times before failing. Progress is printed
+ * to the Serial monitor.
+ */
 void connectToWiFi() {
   Serial.println("[WiFi] Connecting to Wi-Fi...");
   WiFi.begin(SECRET_SSID, SECRET_PASS);
@@ -214,6 +236,12 @@ void connectToWiFi() {
   }
 }
 
+/**
+ * @brief Reconnects to WiFi if the connection is lost.
+ *
+ * Disconnects from the current network and then attempts to reconnect.
+ * This is called when the main loop detects a disconnected state.
+ */
 void reconnectWiFi() {
   WiFi.disconnect();
   delay(100);
@@ -233,7 +261,12 @@ void reconnectWiFi() {
   }
 }
 
-// Status LED Control Functions
+/**
+ * @brief Turns the status LED off.
+ *
+ * Sets the red, green, and blue pins to LOW, turning the light off.
+ * This indicates an offline or disconnected state.
+ */
 void setLightOff() {
   Serial.println("[StatusLight] Setting light to OFF");
   digitalWrite(PIN_RED, LOW);
@@ -241,6 +274,11 @@ void setLightOff() {
   digitalWrite(PIN_BLUE, LOW);
 }
 
+/**
+ * @brief Sets the status LED to green.
+ *
+ * Activates only the green pin. This indicates the printer is idle/ready.
+ */
 void setLightGreen() {
   Serial.println("[StatusLight] Setting light to GREEN");
   digitalWrite(PIN_RED, LOW);
@@ -248,6 +286,12 @@ void setLightGreen() {
   digitalWrite(PIN_BLUE, LOW);
 }
 
+/**
+ * @brief Sets the status LED to white.
+ *
+ * Activates the red, green, and blue pins. This indicates the printer is
+ * currently printing.
+ */
 void setLightWhite() {
   Serial.println("[StatusLight] Setting light to WHITE");
   digitalWrite(PIN_RED, HIGH);
@@ -256,6 +300,16 @@ void setLightWhite() {
 }
 
 
+/**
+ * @brief Displays the printing progress on the matrix.
+ *
+ * Sets the status light to white. Shows the remaining print time, a progress bar,
+ * and the current nozzle and bed temperatures. The border is green.
+ * @param seconds The remaining print time in seconds.
+ * @param progress The print progress as a float from 0.0 to 1.0.
+ * @param temp_T0 The actual temperature of the nozzle.
+ * @param temp_Bed The actual temperature of the bed.
+ */
 void displayPrinterPrinting(int seconds, float progress, int temp_T0, int temp_Bed) {
   setLightWhite();
 
@@ -364,6 +418,14 @@ void displayPrinterPrinting(int seconds, float progress, int temp_T0, int temp_B
   matrix.show();
 }
 
+/**
+ * @brief Displays the printer's ready/idle state on the matrix.
+ *
+ * Sets the status light to green. Shows "Ready", an empty progress bar, and
+ * the current nozzle and bed temperatures. The border is yellow.
+ * @param temp_T0 The actual temperature of the nozzle.
+ * @param temp_Bed The actual temperature of the bed.
+ */
 void displayPrinterReady(int temp_T0, int temp_Bed) {
   setLightGreen();
 
@@ -422,6 +484,13 @@ void displayPrinterReady(int temp_T0, int temp_Bed) {
   matrix.show();
 }
 
+/**
+ * @brief Displays a screen indicating Prusa Link is offline.
+ *
+ * Sets the status light to off. Currently, this function clears the screen
+ * to black to indicate an offline state. The commented-out code can be
+ * enabled to show a text message instead.
+ */
 void displayPrusaLinkOffline() {
   setLightOff();
 
@@ -446,6 +515,12 @@ void displayPrusaLinkOffline() {
   matrix.show();
 }
 
+/**
+ * @brief Displays a screen indicating WiFi is disconnected.
+ *
+ * Sets the status light to off. Shows a red border and the text "WiFi offline"
+ * to indicate a network connection problem.
+ */
 void displayWiFiOffline() {
   setLightOff();
 
@@ -468,7 +543,14 @@ void displayWiFiOffline() {
   matrix.show();
 }
 
-// Scale a float between 0 to 1 to a int between 3 and 61
+/**
+ * @brief Scales a float value (0.0 to 1.0) to an integer range.
+ *
+ * This is used to map the print progress percentage to the pixel width
+ * of the progress bar on the display.
+ * @param value The float value to scale, expected to be between 0.0 and 1.0.
+ * @return An integer mapped to the range [3, 61].
+ */
 int scaleFloatToInteger(float value) {
   // Ensure the input value stays within the expected range
   value = constrain(value, 0.0, 1.0);
@@ -477,7 +559,12 @@ int scaleFloatToInteger(float value) {
   return scaledValue;
 }
 
-// debug: print prusa link API data
+/**
+ * @brief Prints detailed Prusa Link API data to the Serial monitor.
+ *
+ * This is a debugging function. If called, it fetches the latest status and
+ * job information from the printer and prints it in a formatted way.
+ */
 void printPrusaLinkDebug() {
   if (prusaLink.getPrinterStatus()) {
     Serial.println();
